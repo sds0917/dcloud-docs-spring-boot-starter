@@ -19,6 +19,7 @@ import org.springframework.stereotype.Controller;
 import org.springframework.util.ClassUtils;
 import org.springframework.util.StringUtils;
 
+import io.github.sds0917.docs.annotations.EnableDocs;
 import lombok.extern.slf4j.Slf4j;
 
 @Slf4j
