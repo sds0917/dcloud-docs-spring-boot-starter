@@ -1,6 +1,7 @@
 package io.github.sds0917.docs.modules;
 
 import java.util.List;
+import java.util.Map;
 
 import lombok.AllArgsConstructor;
 import lombok.Data;
@@ -16,9 +17,9 @@ public class Api {
 	private String date;
 	private String comment;
 	private String type;
-	private String path;
 	private List<Tag> tags;
 	private List<Url> urls;
+	private Map<String, Object> mvc;
 
 	public static Api build() {
 		return new Api();
@@ -31,11 +32,6 @@ public class Api {
 
 	public Api author(String author) {
 		this.author = author;
-		return this;
-	}
-
-	public Api path(String path) {
-		this.path = path;
 		return this;
 	}
 
@@ -54,8 +50,18 @@ public class Api {
 		return this;
 	}
 
+	public Api urls(List<Url> urls) {
+		this.urls = urls;
+		return this;
+	}
+
 	public Api tags(List<Tag> tags) {
 		this.tags = tags;
+		return this;
+	}
+
+	public Api mvc(Map<String, Object> mvc) {
+		this.mvc = mvc;
 		return this;
 	}
 

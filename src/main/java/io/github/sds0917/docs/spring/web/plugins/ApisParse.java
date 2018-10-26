@@ -5,8 +5,8 @@ import java.lang.reflect.AnnotatedElement;
 import java.lang.reflect.Method;
 import java.util.ArrayList;
 import java.util.Arrays;
-import java.util.HashMap;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -15,31 +15,39 @@ import java.util.concurrent.ConcurrentHashMap;
 import org.apache.commons.lang3.StringUtils;
 import org.springframework.core.annotation.AnnotatedElementUtils;
 import org.springframework.stereotype.Component;
-import org.springframework.util.CollectionUtils;
+import org.springframework.util.ClassUtils;
 import org.springframework.util.ReflectionUtils;
 import org.springframework.web.bind.annotation.RequestMapping;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.thoughtworks.qdox.JavaProjectBuilder;
 import com.thoughtworks.qdox.model.DocletTag;
 import com.thoughtworks.qdox.model.JavaAnnotatedElement;
 import com.thoughtworks.qdox.model.JavaClass;
+import com.thoughtworks.qdox.model.JavaField;
 import com.thoughtworks.qdox.model.JavaMethod;
+import com.thoughtworks.qdox.model.JavaParameter;
 import com.thoughtworks.qdox.model.JavaType;
 
 import io.github.sds0917.docs.modules.Api;
 import io.github.sds0917.docs.modules.App;
+import io.github.sds0917.docs.modules.Param;
 import io.github.sds0917.docs.modules.Tag;
+import io.github.sds0917.docs.modules.Url;
 import io.github.sds0917.docs.spring.web.DocumentationCache;
+import io.github.sds0917.docs.utils.DocsUtil;
 
 @Component
 public class ApisParse {
-	private Map<JavaClass, Class<?>> CACHE_CLASS = new ConcurrentHashMap<JavaClass, Class<?>>();
-	private Map<JavaMethod, Method> CACHE_METHOD = new ConcurrentHashMap<JavaMethod, Method>();
+	private final ObjectMapper objectMapper;
 	private final DocumentationCache documentationCache;
 	private final JavaProjectBuilder builder;
+	private static final Map<String, AnnotatedElement> CACHE_ANNOTATED_ELEMENT = new ConcurrentHashMap<String, AnnotatedElement>();
 
-	public ApisParse(DocumentationCache documentationCache) {
+	public ApisParse(ObjectMapper objectMapper, DocumentationCache documentationCache) {
 		this.builder = new JavaProjectBuilder();
+		this.objectMapper = objectMapper;
 		this.documentationCache = documentationCache;
 	}
 
@@ -51,61 +59,82 @@ public class ApisParse {
 			builder.addSourceTree(new File(path));
 		}
 		App app = App.build();
-		List<Map<String, Object>> datas = new ArrayList<Map<String, Object>>();
 		for (JavaClass jc : builder.getClasses()) {
 			if (!jc.getPackageName().contains(basePackage)) {
 				continue;
 			}
 			Api api = Api.build().name(jc.getName()).type(jc.getFullyQualifiedName()).comment(jc.getComment());
-			api = api.tags(doParseTags(jc)).author(doGetTagValue(jc, "author")).date(doGetTagValue(jc, "date"));
-			app.addApi(api);
+			api = api.mvc(doParseMvcAnnotation(jc)).tags(doParseTags(jc)).author(doGetTagValue(jc, "author")).date(doGetTagValue(jc, "date"));
+			app.addApi(api.urls(doParseApis(jc)));
 		}
 		app = app.name("default");
 		documentationCache.addDocumentation(app.getName(), app);
 		return this;
 	}
-	
-	private List<Map<String, Object>> doParseApis(JavaClass jc) {
-		List<Map<String, Object>> array = new ArrayList<Map<String, Object>>();
+
+	private List<Url> doParseApis(JavaClass jc) {
+		List<Url> urls = new ArrayList<Url>();
 		for (JavaMethod jm : jc.getMethods()) {
-			Map<String, Object> json = new HashMap<String, Object>();
 			Method m = doParseJMethod(jm);
-			json.put("name", m.toGenericString());
-			json.put("comment", jm.getComment());
-			json.put("mvc", doParseMvcAnnotation(jm));
-			// json.putAll(doParseTags(jm));
-			array.add(json);
+			Url url = Url.build().name(jm.getCallSignature()).type(m.toGenericString()).comment(jm.getComment());
+			url = url.mvc(doParseMvcAnnotation(jm)).tags(doParseTags(jm)).author(doGetTagValue(jm, "author")).date(doGetTagValue(jm, "date"));
+			urls.add(url.params(doParseMethodParams(jm)));
 		}
-		return array;
+		return urls;
 	}
 
-	private Map<String, Object> doParseMvcAnnotation(JavaAnnotatedElement element) {
-		Map<String, Object> json = new HashMap<String, Object>();
-		AnnotatedElement ele = null;
-		if (element instanceof JavaMethod) {
-			ele = doParseJMethod((JavaMethod) element);
+	private List<Param> doParseMethodParams(JavaMethod jm) {
+		List<Param> params = new ArrayList<Param>();
+		for (JavaParameter jp : jm.getParameters()) {
+			JavaClass jc = jp.getJavaClass();
+			String comment = jp.getComment();
+			DocletTag dt = jm.getTagsByName("param").stream().filter(a -> a.getValue().startsWith(jp.getName())).findFirst().orElse(null);
+			if (StringUtils.isBlank(comment) && null != dt) {
+				comment = dt.getValue().replace(jp.getName(), StringUtils.EMPTY);
+			}
+			Class<?> c = doParseJClass(jc);
+			if (ClassUtils.isPrimitiveOrWrapper(c) || c.getName().equals(String.class.getName())) {
+				Param p = Param.build().name(jp.getName()).type(jp.getFullyQualifiedName()).simpType(jp.getValue()).comment(comment.trim());
+				p = p.tags(doParseTags(jp)).author(doGetTagValue(jp, "author")).date(doGetTagValue(jp, "date"));
+				params.add(p);
+			} else if (c.isArray()) {
+
+			} else {
+				Param p = Param.build().name(jp.getName()).type(jp.getFullyQualifiedName()).simpType(jp.getValue()).comment(comment.trim());
+				p = p.tags(doParseTags(jp)).author(doGetTagValue(jp, "author")).date(doGetTagValue(jp, "date"));
+				try {
+					p = p.model(objectMapper.writeValueAsString(doParseFields(jc)));
+				} catch (JsonProcessingException e) {
+					e.printStackTrace();
+				}
+				params.add(p);
+			}
 		}
-		if (element instanceof JavaClass) {
-			ele = doParseJClass((JavaClass) element);
-		}
-		if (null == ele) {
-			return json;
-		}
-		RequestMapping mapping = AnnotatedElementUtils.findMergedAnnotation(ele, RequestMapping.class);
-		for (Method me : mapping.getClass().getDeclaredMethods()) {
-			if (new HashSet<>(Arrays.asList("equals,toString,hashCode,annotationType".split(","))).contains(me.getName())) {
+		return params;
+	}
+
+	private Map<String, Object> doParseFields(JavaClass jc) {
+		Map<String, Object> json = new LinkedHashMap<String, Object>();
+		for (JavaField jf : jc.getFields()) {
+			if (Arrays.asList("serialVersionUID".split(",")).contains(jf.getName())) {
 				continue;
 			}
-			json.put(me.getName(), ReflectionUtils.invokeMethod(me, mapping));
+			json.put(jf.getName(), DocsUtil.getValLikeName(jf.getName()));
 		}
 		return json;
 	}
 
+	private Map<String, Object> doParseMvcAnnotation(JavaAnnotatedElement jae) {
+		return AnnotatedElementUtils.findMergedAnnotationAttributes(jae instanceof JavaMethod ? doParseJMethod((JavaMethod) jae) : doParseJClass((JavaClass) jae), RequestMapping.class, false, false);
+	}
+
 	private Class<?> doParseJClass(JavaClass jc) {
 		try {
-			Class<?> c = CACHE_CLASS.get(jc);
+			String key = jc.getFullyQualifiedName();
+			Class<?> c = Class.class.cast(CACHE_ANNOTATED_ELEMENT.get(key));
 			if (null == c) {
-				CACHE_CLASS.put(jc, c = Class.forName(jc.getFullyQualifiedName()));
+				c = Class.forName(jc.getFullyQualifiedName());
+				CACHE_ANNOTATED_ELEMENT.put(key, c);
 			}
 			return c;
 		} catch (ClassNotFoundException e) {
@@ -115,13 +144,15 @@ public class ApisParse {
 
 	private Method doParseJMethod(JavaMethod jm) {
 		try {
-			Method m = CACHE_METHOD.get(jm);
+			String key = jm.getDeclaringClass().getFullyQualifiedName() + "." + jm.getCallSignature();
+			Method m = Method.class.cast(CACHE_ANNOTATED_ELEMENT.get(key));
 			if (null == m) {
 				List<Class<?>> paramTypes = new ArrayList<Class<?>>();
 				for (JavaType jt : jm.getParameterTypes()) {
 					paramTypes.add(Class.forName(jt.getFullyQualifiedName()));
 				}
-				CACHE_METHOD.put(jm, m = ReflectionUtils.findMethod(Class.forName(jm.getDeclaringClass().getFullyQualifiedName()), jm.getName(), paramTypes.toArray(new Class<?>[] {})));
+				m = ReflectionUtils.findMethod(Class.forName(jm.getDeclaringClass().getFullyQualifiedName()), jm.getName(), paramTypes.toArray(new Class<?>[] {}));
+				CACHE_ANNOTATED_ELEMENT.put(key, m);
 			}
 			return m;
 		} catch (ClassNotFoundException e) {
@@ -130,44 +161,21 @@ public class ApisParse {
 	}
 
 	private String doGetTagValue(JavaAnnotatedElement jae, String name) {
-		if (null == jae || CollectionUtils.isEmpty(jae.getTags())) {
-			return StringUtils.EMPTY;
-		}
 		Set<String> values = new HashSet<String>();
-		List<DocletTag> tags = jae.getTagsByName(name);
-		for (DocletTag dt : tags) {
+		for (DocletTag dt : jae.getTagsByName(name)) {
+			if (!dt.getName().equals(name)) {
+				continue;
+			}
 			values.add(dt.getValue().replace(name, StringUtils.EMPTY));
 		}
 		return StringUtils.join(values, "、");
 	}
 
-	private List<Tag> doParseTags(JavaAnnotatedElement element) {
+	private List<Tag> doParseTags(JavaAnnotatedElement jae) {
 		List<Tag> tags = new ArrayList<Tag>();
-		for (DocletTag dt : element.getTags()) {
+		for (DocletTag dt : jae.getTags()) {
 			tags.add(Tag.build().name(dt.getName()).value(dt.getValue()));
 		}
-		/*
-		 * String key = "param"; Map<String, Object> json = new HashMap<String,
-		 * Object>(); for (DocletTag docletTag : element.getTags()) { String name =
-		 * docletTag.getName(); if (null != json.get(name) || (element instanceof
-		 * JavaMethod && key.equals(name))) { continue; } Set<String> values = new
-		 * TreeSet<String>(); for (DocletTag tag : element.getTagsByName(name)) {
-		 * values.add(tag.getValue()); } json.put(name,
-		 * StringUtils.join(values.toArray(), "、")); }
-		 * 
-		 * if (element instanceof JavaMethod) { JavaMethod jm = (JavaMethod) element; if
-		 * (CollectionUtils.isEmpty(jm.getParameters())) { return json; }
-		 * List<Map<String, String>> params = new ArrayList<Map<String, String>>(); for
-		 * (JavaParameter jp : jm.getParameters()) { Map<String, String> param = new
-		 * HashMap<String, String>(); param.put("name", jp.getName());
-		 * param.put("fullyQualifiedName", jp.getFullyQualifiedName()); DocletTag tag =
-		 * jm.getTagsByName(key).stream().filter(e ->
-		 * e.getParameters().stream().filter(p -> p.equals(jp.getName())).count() >
-		 * 0).findFirst().orElse(null); if (null == tag) { params.add(param); continue;
-		 * } param.put("comment", StringUtils.join(tag.getParameters().stream().filter(p
-		 * -> !jp.getName().equals(p)).toArray(), "")); params.add(param); }
-		 * json.put("params", params); }
-		 */
 		return tags;
 	}
 

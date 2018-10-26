@@ -6,7 +6,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
 /**
- * 入口Controller类1 sdfdsfds测试啊
+ * 入口Controller类1
  * 
  * @author 孙东升
  * @date 2018年10月24日

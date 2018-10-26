@@ -21,7 +21,7 @@ import io.github.sds0917.docs.bean.User;
  * @date 2018年10月24日
  */
 @RestController
-@RequestMapping("/user")
+@RequestMapping({ "/user", "/u" })
 public class UserController {
 
 	/**
@@ -31,7 +31,7 @@ public class UserController {
 	 * @param size 页大小
 	 * @return 用户列表数据
 	 */
-	@GetMapping
+	@GetMapping({ "", "/list" })
 	public ResponseEntity<List<User>> findAll(Integer page, Integer size) {
 		return ResponseEntity.ok(new ArrayList<User>());
 	}
@@ -72,8 +72,7 @@ public class UserController {
 	/**
 	 * 更新用户
 	 * 
-	 * @param user 待更新数据
-	 * 这个是测试呢
+	 * @param user 待更新数据 这个是测试呢
 	 * @return 影响行数
 	 */
 	@PatchMapping
